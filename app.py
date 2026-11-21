@@ -19,6 +19,13 @@ APPROVED_FILE = os.path.join(DATA_DIR, "approved_gems.json")
 EXTRA_FILE = "extra_places.json"
 MAX_PENDING = 50
 
+CATEGORY_EMOJI = {
+    "Beaches": "🏖️", "Mountains & Peaks": "⛰️", "Nature & Wildlife": "🌿", "Viewpoints": "🔭",
+    "Historical Places": "🏛️", "Attractions": "⭐", "Hotels": "🏨", "Restaurants": "🍽️",
+    "Cafes": "☕", "Bars": "🍺", "Places of Worship": "🛕", "Adventure": "🤿",
+    "Transport": "⛴️", "Hidden Gems": "💎", "Other": "📍",
+}
+
 
 def read_json(path, default):
     try:
@@ -36,6 +43,11 @@ def write_json(path, data):
         return True
     except Exception:
         return False
+
+
+@st.cache_data(ttl=300)
+def load_extra():
+    return read_json(EXTRA_FILE, [])
 
 
 def normalize(p, source):
@@ -66,21 +78,22 @@ def normalize(p, source):
 
 
 def load_places():
-    places, ids, names = [], set(), set()
+    places, ids, official_names = [], set(), set()
 
     def add(raw, source):
         p = normalize(raw, source)
         if not p or p["id"] in ids:
             return
-        if source == "osm" and p["name"].lower() in names:
+        if source == "osm" and p["name"].lower() in official_names:
             return
         ids.add(p["id"])
-        names.add(p["name"].lower())
+        if source == "official":
+            official_names.add(p["name"].lower())
         places.append(p)
 
     for raw in BASE_PLACES:
         add(raw, "official")
-    for raw in read_json(EXTRA_FILE, []):
+    for raw in load_extra():
         src = raw.get("source") if raw.get("source") in ("osm", "community") else "osm"
         add(raw, src)
     for raw in read_json(APPROVED_FILE, []):
@@ -108,19 +121,22 @@ def owner_unlocked(pin):
 
 places = load_places()
 by_id = {p["id"]: p for p in places}
+known_names = {p["name"].lower() for p in places}
 
 for key, default in (("messages", []), ("focus", ""), ("plan", ""), ("last_q", 0.0), ("gem_count", 0)):
     if key not in st.session_state:
         st.session_state[key] = default
 
 st.title("🌴 WonderMap AI - Andaman")
-st.caption("Explore the Andaman Islands. Details can change, so please confirm hours, prices, ferries and permits locally. "
+st.caption("Explore the Andaman Islands. " + str(len(places)) + " places on the map. "
+           "Details can change, so please confirm hours, prices, ferries and permits locally. "
+           "Most places come from OpenStreetMap volunteers and are not verified. "
            "Your questions are sent to Google's Gemini to get answers.")
 
 # ---------- Owner panel (sidebar) ----------
 with st.sidebar:
     st.header("🔑 Owner")
-    with st.expander("Review hidden gems"):
+    with st.expander("Review submitted places"):
         pin = st.text_input("Owner PIN", type="password", key="owner_pin_box")
         if pin:
             ok, msg = owner_unlocked(pin)
@@ -130,17 +146,21 @@ with st.sidebar:
                 pending = read_json(PENDING_FILE, [])
                 st.write(len(pending), "waiting for review")
                 for g in pending:
+                    cat = g.get("category") if g.get("category") in CATEGORY_EMOJI else "Hidden Gems"
+                    emoji = CATEGORY_EMOJI[cat]
                     st.divider()
-                    st.write("**" + g["name"] + "** · " + g["area"])
-                    st.write(g["info"])
+                    st.text(emoji + " " + g["name"] + " | " + cat + " | " + g["area"])
+                    st.text(g["info"])
                     if g.get("tips"):
-                        st.write("Tips: " + g["tips"])
-                    st.write(str(round(g["lat"], 5)) + ", " + str(round(g["lng"], 5)))
+                        st.text("Extra: " + g["tips"])
+                    st.text(str(round(g["lat"], 5)) + ", " + str(round(g["lng"], 5)))
+                    if g["name"].lower() in known_names:
+                        st.warning("A place with this name is already on the map. It may be a duplicate.")
                     c1, c2 = st.columns(2)
                     if c1.button("Approve", key="ap_" + g["id"]):
                         approved = read_json(APPROVED_FILE, [])
-                        approved.append({"id": g["id"], "name": g["name"], "category": "Hidden Gems",
-                                         "emoji": "💎", "lat": g["lat"], "lng": g["lng"], "area": g["area"],
+                        approved.append({"id": g["id"], "name": g["name"], "category": cat,
+                                         "emoji": emoji, "lat": g["lat"], "lng": g["lng"], "area": g["area"],
                                          "info": g["info"], "tips": g.get("tips", "")})
                         write_json(APPROVED_FILE, approved)
                         write_json(PENDING_FILE, [x for x in pending if x["id"] != g["id"]])
@@ -149,11 +169,11 @@ with st.sidebar:
                         write_json(PENDING_FILE, [x for x in pending if x["id"] != g["id"]])
                         st.rerun()
                 st.divider()
-                st.download_button("Download approved gems (backup)",
+                st.download_button("Download approved places (backup)",
                                    data=json.dumps(read_json(APPROVED_FILE, []), ensure_ascii=False, indent=1),
                                    file_name="approved_gems.json", mime="application/json")
 
-tab_map, tab_trip, tab_gem = st.tabs(["🗺️ Map & Chat", "🧳 My Trip", "💎 Add a Hidden Gem"])
+tab_map, tab_trip, tab_gem = st.tabs(["🗺️ Map & Chat", "🧳 My Trip", "➕ Add a Place"])
 
 # ---------- Map and chat ----------
 with tab_map:
@@ -182,7 +202,7 @@ with tab_map:
 with tab_trip:
     st.write("Pick the places you want to visit, and the AI will plan your days.")
     labels = {p["id"]: p["emoji"] + " " + p["name"] + " (" + p["area"] + ")" for p in places}
-    chosen_ids = st.multiselect("Places (up to 15)", options=list(labels.keys()),
+    chosen_ids = st.multiselect("Places (up to 15). Type to search.", options=list(labels.keys()),
                                 format_func=lambda i: labels[i], max_selections=15)
     days = st.number_input("Number of days", min_value=1, max_value=7, value=2, step=1)
     if st.button("✨ Plan with AI"):
@@ -201,15 +221,18 @@ with tab_trip:
         st.caption("Tap the copy icon on the box below to copy your plan.")
         st.code(st.session_state.plan, language=None)
 
-# ---------- Add a hidden gem ----------
+# ---------- Add a place ----------
 with tab_gem:
-    st.write("Know a hidden gem? Tell us. The owner reviews every submission before it appears on the map.")
-    st.caption("To get the coordinates, long-press the spot in Google Maps and copy the two numbers shown.")
+    st.write("Is a beach, hotel, restaurant, cafe, bar, historical place or hidden gem missing? "
+             "Add it here. The owner reviews every submission before it appears on the map.")
+    st.caption("To get the coordinates, long-press the spot in Google Maps and copy the two numbers shown. "
+               "Please do not include phone numbers or other personal details.")
     with st.form("gem_form", clear_on_submit=True):
         g_name = st.text_input("Place name *", max_chars=60)
+        g_cat = st.selectbox("Type of place *", list(CATEGORY_EMOJI.keys()), index=0)
         g_area = st.text_input("Area (for example: Havelock Island)", max_chars=60)
-        g_desc = st.text_area("Description * (what makes it special?)", max_chars=400)
-        g_tips = st.text_area("Tips (optional)", max_chars=200)
+        g_desc = st.text_area("Description * (what is it, what makes it good?)", max_chars=400)
+        g_tips = st.text_area("Opening hours, prices or tips (optional)", max_chars=200)
         c1, c2 = st.columns(2)
         g_lat = c1.number_input("Latitude *", min_value=6.0, max_value=14.5, value=11.6765, format="%.5f")
         g_lng = c2.number_input("Longitude *", min_value=92.0, max_value=94.5, value=92.7275, format="%.5f")
@@ -223,17 +246,18 @@ with tab_gem:
         elif len(desc) < 10:
             st.error("Please write a short description (at least 10 letters).")
         elif st.session_state.gem_count >= 3:
-            st.error("You have sent enough gems for now. Thank you!")
+            st.error("You have sent enough places for now. Thank you!")
         elif len(pending) >= MAX_PENDING:
-            st.error("Too many gems are waiting for review. Please try again later.")
+            st.error("Too many places are waiting for review. Please try again later.")
         else:
-            slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:30] or "gem"
+            slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:30] or "place"
             pending.append({"id": "gem-" + slug + "-" + str(int(time.time())), "name": name,
+                            "category": g_cat if g_cat in CATEGORY_EMOJI else "Other",
                             "area": clean_text(g_area, 60) or "Andaman", "info": desc,
                             "tips": clean_text(g_tips, 200), "lat": float(g_lat), "lng": float(g_lng)})
             if write_json(PENDING_FILE, pending):
                 st.session_state.gem_count += 1
-                st.success("Thank you! Your hidden gem was sent for review.")
+                st.success("Thank you! Your place was sent for review.")
             else:
-                st.error("Could not save your gem right now. Please try again later.")
+                st.error("Could not save your place right now. Please try again later.")
 # END OF FILE
