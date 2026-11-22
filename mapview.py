@@ -1,4 +1,4 @@
- import json
+import json
 
 MAP_TEMPLATE = r"""
 <!DOCTYPE html>
