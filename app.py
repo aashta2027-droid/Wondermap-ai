@@ -10,7 +10,6 @@ import streamlit.components.v1 as components
 from places import PLACES as BASE_PLACES, NC
 from mapview import build_map_html
 from ai import clean_text, secret, ask_ai, plan_trip
-from weather import AREAS, describe, get_weather
 
 st.set_page_config(page_title="WonderMap AI - Andaman", page_icon="🌴", layout="wide")
 
@@ -120,16 +119,11 @@ def owner_unlocked(pin):
     return False, "Wrong PIN."
 
 
-def fmt(v, unit):
-    return "n/a" if v is None else str(v) + unit
-
-
 places = load_places()
 by_id = {p["id"]: p for p in places}
 known_names = {p["name"].lower() for p in places}
 
-for key, default in (("messages", []), ("focus", ""), ("plan", ""), ("last_q", 0.0), ("gem_count", 0),
-                     ("weather_area", "")):
+for key, default in (("messages", []), ("focus", ""), ("plan", ""), ("last_q", 0.0), ("gem_count", 0)):
     if key not in st.session_state:
         st.session_state[key] = default
 
@@ -179,12 +173,11 @@ with st.sidebar:
                                    data=json.dumps(read_json(APPROVED_FILE, []), ensure_ascii=False, indent=1),
                                    file_name="approved_gems.json", mime="application/json")
 
-tab_map, tab_trip, tab_weather, tab_gem = st.tabs(["🗺️ Map & Chat", "🧳 My Trip", "🌦️ Weather", "➕ Add a Place"])
+tab_map, tab_trip, tab_gem = st.tabs(["🗺️ Map & Chat", "🧳 My Trip", "➕ Add a Place"])
 
 # ---------- Map and chat ----------
 with tab_map:
     components.html(build_map_html(places, st.session_state.focus), height=560)
-    st.caption("Tip: use the layers button at the bottom-right of the map to switch to Satellite or Terrain.")
     st.subheader("✨ Ask WonderMap AI")
     for m in st.session_state.messages[-12:]:
         with st.chat_message(m["role"]):
@@ -227,42 +220,6 @@ with tab_trip:
         st.write(st.session_state.plan)
         st.caption("Tap the copy icon on the box below to copy your plan.")
         st.code(st.session_state.plan, language=None)
-
-# ---------- Weather ----------
-with tab_weather:
-    st.write("Check the weather near the area you plan to visit.")
-    area = st.selectbox("Area", list(AREAS.keys()))
-    if st.button("Show weather"):
-        st.session_state.weather_area = area
-    shown = st.session_state.weather_area
-    if shown in AREAS:
-        lat, lng = AREAS[shown]
-        try:
-            w = get_weather(lat, lng)
-        except Exception:
-            w = None
-        if not w:
-            st.error("Could not get the weather right now. Please try again in a few minutes.")
-        else:
-            now = w["now"]
-            label, icon = describe(now.get("weather_code"))
-            st.subheader(icon + " " + shown + ": " + label)
-            c1, c2 = st.columns(2)
-            c1.metric("Temperature", fmt(now.get("temperature_2m"), " °C"))
-            c2.metric("Feels like", fmt(now.get("apparent_temperature"), " °C"))
-            c3, c4 = st.columns(2)
-            c3.metric("Wind", fmt(now.get("wind_speed_10m"), " km/h"))
-            c4.metric("Humidity", fmt(now.get("relative_humidity_2m"), " %"))
-            if w["wave"] is not None:
-                st.metric("Wave height (model estimate)", fmt(w["wave"], " m"))
-            st.markdown("**Next 3 days**")
-            for d in w["days"]:
-                dlabel, dicon = describe(d["code"])
-                st.write(dicon + " " + str(d["date"]) + ": " + dlabel + ", " + fmt(d["min"], "") + " to "
-                         + fmt(d["max"], " °C") + ", rain chance " + fmt(d["rain"], "%"))
-    st.caption("Weather data by Open-Meteo.com. Wave height is a model estimate and may be missing. "
-               "This is not for safety decisions. Check official forecasts (such as IMD) and local ferry and "
-               "boat notices before you travel.")
 
 # ---------- Add a place ----------
 with tab_gem:
